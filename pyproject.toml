@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gtd-email"
+version = "0.1.0"
+description = "GTD (Getting Things Done) email management tool for Outlook/Hotmail"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "GTD Email Tool", email = "jhalecpa@hotmail.com" },
+]
+dependencies = [
+    "msal>=1.24.0",
+    "requests>=2.31.0",
+    "click>=8.1.0",
+    "rich>=13.0.0",
+]
+
+[project.scripts]
+gtd = "gtd_email.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["gtd_email*"]

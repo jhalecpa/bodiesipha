@@ -115,9 +115,7 @@ class GTDProcessor:
                     trash_email(message_id)
                 except GraphAPIError as exc:
                     print(f"[Warning] Could not trash email in Outlook: {exc}")
-            elif category == GTDCategory.REFERENCE:
-                # Reference emails stay in inbox but get labelled via folder
-                pass
+            # CALENDAR and INBOX categories stay in the Outlook inbox folder
 
         update_email_category(
             message_id=message_id,
