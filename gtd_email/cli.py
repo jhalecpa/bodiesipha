@@ -449,12 +449,39 @@ def cmd_ai_clarify(max_emails: int, dry_run: bool, offline: bool, model: str) ->
         print_warning("Dry run — no changes saved. Re-run without [bold]--dry-run[/bold] to apply.")
         return
 
-    if not prompt_confirm(f"Apply these {total} classifications?"):
-        print_info("Aborted — no changes made.")
-        return
+    # --- Bulk delete prompt for trash ---
+    trash_pairs = [(e, r) for e, r in results if r["category"] == GTDCategory.TRASH]
+    delete_trash = False
+    if trash_pairs:
+        print_rule()
+        console.print(f"\n[bold red]Trash ({len(trash_pairs)} emails)[/bold red] — sample:\n")
+        for email, result in trash_pairs[:10]:
+            console.print(
+                f"  [dim]•[/dim] {email['subject'][:60]:<60}  "
+                f"[dim]{email['sender'][:30]}[/dim]\n"
+                f"    [italic dim]{result.get('reasoning', '')}[/italic dim]"
+            )
+        if len(trash_pairs) > 10:
+            console.print(f"  [dim]... and {len(trash_pairs) - 10} more[/dim]")
+        console.print()
+        delete_trash = prompt_confirm(
+            f"Permanently delete these [bold]{len(trash_pairs)}[/bold] emails from Outlook?"
+        )
+        if not delete_trash:
+            print_info("Trash emails will be skipped (left in inbox).")
 
-    # Apply classifications
+    # --- Confirm remaining classifications ---
+    non_trash = [(e, r) for e, r in results if r["category"] != GTDCategory.TRASH]
+    non_inbox = [(e, r) for e, r in non_trash if r["category"] != GTDCategory.INBOX]
+    if non_inbox:
+        print_rule()
+        if not prompt_confirm(f"Apply [bold]{len(non_inbox)}[/bold] other classifications?"):
+            print_info("Aborted — no changes made.")
+            return
+
+    # --- Apply ---
     applied = 0
+    deleted = 0
     skipped = 0
     with Progress(
         SpinnerColumn(),
@@ -466,10 +493,17 @@ def cmd_ai_clarify(max_emails: int, dry_run: bool, offline: bool, model: str) ->
         task = progress.add_task("Applying...", total=total)
         for email, result in results:
             cat = result["category"]
+
             if cat == GTDCategory.INBOX:
                 skipped += 1
                 progress.advance(task)
                 continue
+
+            if cat == GTDCategory.TRASH and not delete_trash:
+                skipped += 1
+                progress.advance(task)
+                continue
+
             try:
                 processor.categorize(
                     message_id=email["message_id"],
@@ -480,12 +514,22 @@ def cmd_ai_clarify(max_emails: int, dry_run: bool, offline: bool, model: str) ->
                     ),
                     sync_to_outlook=not offline,
                 )
-                applied += 1
+                if cat == GTDCategory.TRASH:
+                    deleted += 1
+                else:
+                    applied += 1
             except Exception as exc:
                 errors.append(f"{email['subject'][:40]}: {exc}")
             progress.advance(task)
 
-    print_success(f"Done! {applied} emails classified, {skipped} left in inbox for manual review.")
+    parts = []
+    if applied:
+        parts.append(f"{applied} classified")
+    if deleted:
+        parts.append(f"{deleted} deleted")
+    if skipped:
+        parts.append(f"{skipped} left in inbox")
+    print_success("Done! " + ", ".join(parts) + ".")
     if errors:
         print_warning(f"{len(errors)} error(s) encountered:")
         for e in errors[:5]:
