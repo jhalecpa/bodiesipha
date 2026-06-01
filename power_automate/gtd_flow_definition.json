@@ -1,0 +1,298 @@
+{
+  "properties": {
+    "connectionReferences": {
+      "shared_office365": {
+        "runtimeSource": "embedded",
+        "connection": {},
+        "api": {
+          "name": "shared_office365"
+        }
+      }
+    },
+    "definition": {
+      "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+      "contentVersion": "1.0.0.0",
+      "parameters": {
+        "$connections": {
+          "defaultValue": {},
+          "type": "Object"
+        },
+        "$authentication": {
+          "defaultValue": {},
+          "type": "SecureObject"
+        },
+        "AnthropicApiKey": {
+          "defaultValue": "PASTE_YOUR_ANTHROPIC_API_KEY_HERE",
+          "type": "SecureString"
+        }
+      },
+      "triggers": {
+        "When_a_new_email_arrives": {
+          "type": "ApiConnectionNotification",
+          "inputs": {
+            "host": {
+              "connection": {
+                "name": "@parameters('$connections')['shared_office365']['connectionId']"
+              }
+            },
+            "fetch": {
+              "pathTemplate": {
+                "template": "/v3/Mail/OnNewEmail"
+              },
+              "method": "get",
+              "queries": {
+                "folderPath": "Inbox",
+                "importance": "Any",
+                "fetchOnlyWithAttachment": false,
+                "includeAttachments": false
+              }
+            },
+            "subscribe": {
+              "body": {
+                "NotificationUrl": "@{listCallbackUrl()}"
+              },
+              "pathTemplate": {
+                "template": "/GraphMailSubscriptionPoke/$subscriptions"
+              },
+              "method": "post",
+              "queries": {
+                "folderPath": "Inbox"
+              }
+            }
+          }
+        }
+      },
+      "actions": {
+        "Compose_Email_Preview": {
+          "type": "Compose",
+          "inputs": "@substring(triggerBody()?['body'], 0, min(300, length(triggerBody()?['body'])))",
+          "runAfter": {}
+        },
+        "Call_Claude_GTD_Classifier": {
+          "type": "Http",
+          "inputs": {
+            "method": "POST",
+            "uri": "https://api.anthropic.com/v1/messages",
+            "headers": {
+              "x-api-key": "@parameters('AnthropicApiKey')",
+              "anthropic-version": "2023-06-01",
+              "content-type": "application/json"
+            },
+            "body": {
+              "model": "claude-opus-4-8",
+              "max_tokens": 256,
+              "system": "You are a GTD (Getting Things Done) expert. Classify emails into exactly one category.\n\nCategories:\n- trash: spam, marketing, promotions, mass newsletters, automated low-value notifications\n- reference: receipts, confirmations, documentation, useful info — no action needed\n- someday: interesting but no current commitment\n- waiting: awaiting a reply from someone else\n- next_action: requires a specific action from the user soon\n- project: multi-step effort or ongoing thread\n- calendar: has a specific meeting time or deadline\n- inbox: ambiguous, needs human review\n\nRules (apply in order):\n1. Marketing/promotional → trash\n2. Receipt/order/bank/travel confirmation → reference\n3. Meeting invite or time-boxed event → calendar\n4. User explicitly asked to do something → next_action\n5. Ongoing multi-step goal → project\n6. Waiting on someone → waiting\n7. Interesting idea, no commitment → someday\n8. Useful info to keep → reference\n9. Unclear → inbox\n\nRespond with ONLY valid JSON — no markdown, no explanation outside the JSON:\n{\"category\": \"<one of the 8 categories>\", \"reasoning\": \"<one sentence>\", \"next_action\": \"<specific action if next_action/project, else empty string>\"}",
+              "messages": [
+                {
+                  "role": "user",
+                  "content": "Subject: @{triggerBody()?['subject']}\nFrom: @{triggerBody()?['from']}\nDate: @{triggerBody()?['receivedDateTime']}\nPreview: @{outputs('Compose_Email_Preview')}\n\nClassify this email."
+                }
+              ]
+            }
+          },
+          "runAfter": {
+            "Compose_Email_Preview": ["Succeeded"]
+          }
+        },
+        "Parse_AI_Response": {
+          "type": "ParseJson",
+          "inputs": {
+            "content": "@body('Call_Claude_GTD_Classifier')?['content']?[0]?['text']",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "category": {
+                  "type": "string"
+                },
+                "reasoning": {
+                  "type": "string"
+                },
+                "next_action": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "runAfter": {
+            "Call_Claude_GTD_Classifier": ["Succeeded"]
+          }
+        },
+        "Route_by_GTD_Category": {
+          "type": "Switch",
+          "expression": "@body('Parse_AI_Response')?['category']",
+          "cases": {
+            "trash": {
+              "case": "trash",
+              "actions": {
+                "Delete_Email": {
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['shared_office365']['connectionId']"
+                      }
+                    },
+                    "method": "delete",
+                    "path": "/v2/Mail/@{encodeURIComponent(triggerBody()?['id'])}"
+                  }
+                }
+              }
+            },
+            "reference": {
+              "case": "reference",
+              "actions": {
+                "Move_to_GTD_Reference": {
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['shared_office365']['connectionId']"
+                      }
+                    },
+                    "method": "post",
+                    "path": "/v2/Mail/Move",
+                    "body": {
+                      "emailId": "@triggerBody()?['id']",
+                      "folderPath": "GTD-Reference"
+                    }
+                  }
+                }
+              }
+            },
+            "next_action": {
+              "case": "next_action",
+              "actions": {
+                "Move_to_GTD_Next_Actions": {
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['shared_office365']['connectionId']"
+                      }
+                    },
+                    "method": "post",
+                    "path": "/v2/Mail/Move",
+                    "body": {
+                      "emailId": "@triggerBody()?['id']",
+                      "folderPath": "GTD-Next-Actions"
+                    }
+                  }
+                },
+                "Flag_as_Action_Required": {
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['shared_office365']['connectionId']"
+                      }
+                    },
+                    "method": "patch",
+                    "path": "/v2/Mail/@{encodeURIComponent(triggerBody()?['id'])}",
+                    "body": {
+                      "flag": {
+                        "flagStatus": "flagged"
+                      }
+                    }
+                  },
+                  "runAfter": {
+                    "Move_to_GTD_Next_Actions": ["Succeeded"]
+                  }
+                }
+              }
+            },
+            "waiting": {
+              "case": "waiting",
+              "actions": {
+                "Move_to_GTD_Waiting": {
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['shared_office365']['connectionId']"
+                      }
+                    },
+                    "method": "post",
+                    "path": "/v2/Mail/Move",
+                    "body": {
+                      "emailId": "@triggerBody()?['id']",
+                      "folderPath": "GTD-Waiting-For"
+                    }
+                  }
+                }
+              }
+            },
+            "someday": {
+              "case": "someday",
+              "actions": {
+                "Move_to_GTD_Someday": {
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['shared_office365']['connectionId']"
+                      }
+                    },
+                    "method": "post",
+                    "path": "/v2/Mail/Move",
+                    "body": {
+                      "emailId": "@triggerBody()?['id']",
+                      "folderPath": "GTD-Someday-Maybe"
+                    }
+                  }
+                }
+              }
+            },
+            "project": {
+              "case": "project",
+              "actions": {
+                "Move_to_GTD_Projects": {
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['shared_office365']['connectionId']"
+                      }
+                    },
+                    "method": "post",
+                    "path": "/v2/Mail/Move",
+                    "body": {
+                      "emailId": "@triggerBody()?['id']",
+                      "folderPath": "GTD-Projects"
+                    }
+                  }
+                }
+              }
+            },
+            "calendar": {
+              "case": "calendar",
+              "actions": {
+                "Move_to_GTD_Calendar": {
+                  "type": "ApiConnection",
+                  "inputs": {
+                    "host": {
+                      "connection": {
+                        "name": "@parameters('$connections')['shared_office365']['connectionId']"
+                      }
+                    },
+                    "method": "post",
+                    "path": "/v2/Mail/Move",
+                    "body": {
+                      "emailId": "@triggerBody()?['id']",
+                      "folderPath": "GTD-Calendar"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "actions": {}
+          },
+          "runAfter": {
+            "Parse_AI_Response": ["Succeeded"]
+          }
+        }
+      }
+    }
+  }
+}
