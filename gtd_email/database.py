@@ -259,6 +259,27 @@ def delete_email_record(message_id: str) -> None:
         conn.execute("DELETE FROM emails WHERE message_id=?", (message_id,))
 
 
+def get_past_decisions(max_per_category: int = 4) -> list[sqlite3.Row]:
+    """
+    Return a sample of manually-processed emails across all categories.
+    Used as few-shot examples for AI classification.
+    """
+    rows: list[sqlite3.Row] = []
+    with get_db() as conn:
+        for cat in GTDCategory.ALL:
+            if cat == GTDCategory.INBOX:
+                continue
+            batch = conn.execute(
+                """SELECT * FROM emails
+                   WHERE category=? AND processed_at IS NOT NULL
+                   ORDER BY processed_at DESC
+                   LIMIT ?""",
+                (cat, max_per_category),
+            ).fetchall()
+            rows.extend(batch)
+    return rows
+
+
 def add_project(name: str, description: str = "") -> int:
     """Add a new project and return its ID."""
     now = _now()

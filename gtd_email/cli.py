@@ -24,6 +24,7 @@ from .database import (
     add_project,
     count_by_category,
     get_emails_by_category,
+    get_past_decisions,
     get_projects,
     get_unprocessed_emails,
     initialize_db,
@@ -138,11 +139,24 @@ def cmd_setup() -> None:
         default=existing.get("email", "jhalecpa@hotmail.com"),
     )
 
+    console.print(
+        "\n[bold]Optional: Anthropic API key for AI-powered bulk classification.[/bold]\n"
+        "Get one at [link=https://console.anthropic.com]console.anthropic.com[/link]. "
+        "Leave blank to skip.\n"
+    )
+    anthropic_key = Prompt.ask(
+        "[bold]Anthropic API key[/bold] (optional, for [bold cyan]gtd ai-clarify[/bold cyan])",
+        default=existing.get("anthropic_api_key", ""),
+        password=True,
+    )
+
     config = {
         "client_id": client_id.strip(),
         "tenant_id": tenant_id.strip() or "consumers",
         "email": email.strip(),
     }
+    if anthropic_key.strip():
+        config["anthropic_api_key"] = anthropic_key.strip()
     save_config(config)
 
     print_success(f"Configuration saved to {CONFIG_FILE}")
@@ -298,6 +312,184 @@ def cmd_clarify(offline: bool) -> None:
         print_rule()
 
     print_info(f"Processed {processed_count} email(s) this session.")
+
+
+# ---------------------------------------------------------------------------
+# gtd ai-clarify
+# ---------------------------------------------------------------------------
+
+@cli.command("ai-clarify")
+@click.option("--max", "max_emails", default=500, show_default=True,
+              help="Maximum number of inbox emails to classify.")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Show what AI would classify without saving anything.")
+@click.option("--offline", is_flag=True, default=False,
+              help="Skip syncing changes back to Outlook.")
+@click.option("--model", default="claude-opus-4-8", show_default=True,
+              help="Claude model to use for classification.")
+def cmd_ai_clarify(max_emails: int, dry_run: bool, offline: bool, model: str) -> None:
+    """Bulk-classify inbox emails with AI (Claude) using the GTD methodology.
+
+    The AI learns from your past manual decisions and applies the same patterns
+    to new emails. Use --dry-run to preview before committing.
+    """
+    if not offline:
+        _require_auth()
+
+    config = load_config()
+    api_key = config.get("anthropic_api_key", "")
+    if not api_key:
+        print_error(
+            "No Anthropic API key configured. Run [bold]gtd setup[/bold] and enter your key, "
+            "or set the [bold]ANTHROPIC_API_KEY[/bold] environment variable."
+        )
+        import os
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            sys.exit(1)
+
+    try:
+        import anthropic as _anthropic_check  # noqa: F401
+    except ImportError:
+        print_error(
+            "The [bold]anthropic[/bold] package is not installed. "
+            "Run: [bold]pip install anthropic[/bold]"
+        )
+        sys.exit(1)
+
+    from .ai_classifier import classify_all
+
+    print_header("AI Clarify — Bulk GTD Classification")
+
+    processor = GTDProcessor(offline=offline)
+    unprocessed = processor.get_unprocessed()
+
+    if not unprocessed:
+        print_success("No unprocessed emails — inbox is clean!")
+        return
+
+    emails = [processor.format_email_summary(r) for r in unprocessed[:max_emails]]
+    total = len(emails)
+    print_info(f"Classifying [bold]{total}[/bold] emails with Claude...")
+
+    # Load past decisions for few-shot learning
+    past_rows = get_past_decisions(max_per_category=4)
+    if past_rows:
+        past_examples = [processor.format_email_summary(r) for r in past_rows]
+        print_info(
+            f"Using [bold]{len(past_examples)}[/bold] of your past decisions as examples."
+        )
+    else:
+        past_examples = []
+        print_info("No past decisions yet — AI will use general GTD rules.")
+
+    print_rule()
+
+    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
+
+    results: list[tuple[dict, dict]] = []
+    errors: list[str] = []
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total} emails"),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Classifying...", total=total)
+
+        def on_progress(done: int, _total: int) -> None:
+            progress.update(task, completed=done)
+
+        try:
+            results = classify_all(
+                emails,
+                api_key=api_key,
+                examples=past_examples,
+                model=model,
+                progress_callback=on_progress,
+            )
+        except Exception as exc:
+            print_error(f"AI classification failed: {exc}")
+            sys.exit(1)
+
+    # Tally results
+    from collections import Counter
+    tally: Counter = Counter()
+    for _email, result in results:
+        tally[result["category"]] += 1
+
+    # Show summary table
+    from rich.table import Table
+    from rich import box as rbox
+
+    table = Table(title="AI Classification Summary", box=rbox.ROUNDED)
+    table.add_column("Category", style="bold")
+    table.add_column("Count", justify="right")
+    table.add_column("% of inbox", justify="right")
+    for cat in GTDCategory.ALL:
+        if cat == GTDCategory.INBOX:
+            continue
+        count = tally.get(cat, 0)
+        if count == 0:
+            continue
+        pct = f"{count / total * 100:.0f}%"
+        table.add_row(GTDCategory.DISPLAY_NAMES.get(cat, cat), str(count), pct)
+    if tally.get(GTDCategory.INBOX, 0):
+        table.add_row(
+            "[dim]Inbox (needs review)[/dim]",
+            str(tally[GTDCategory.INBOX]),
+            f"{tally[GTDCategory.INBOX] / total * 100:.0f}%",
+        )
+    console.print(table)
+
+    if dry_run:
+        print_warning("Dry run — no changes saved. Re-run without [bold]--dry-run[/bold] to apply.")
+        return
+
+    if not prompt_confirm(f"Apply these {total} classifications?"):
+        print_info("Aborted — no changes made.")
+        return
+
+    # Apply classifications
+    applied = 0
+    skipped = 0
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Applying...", total=total)
+        for email, result in results:
+            cat = result["category"]
+            if cat == GTDCategory.INBOX:
+                skipped += 1
+                progress.advance(task)
+                continue
+            try:
+                processor.categorize(
+                    message_id=email["message_id"],
+                    category=cat,
+                    next_action=result.get("next_action", ""),
+                    notes=result.get("reasoning", "") + (
+                        (" | " + result["notes"]) if result.get("notes") else ""
+                    ),
+                    sync_to_outlook=not offline,
+                )
+                applied += 1
+            except Exception as exc:
+                errors.append(f"{email['subject'][:40]}: {exc}")
+            progress.advance(task)
+
+    print_success(f"Done! {applied} emails classified, {skipped} left in inbox for manual review.")
+    if errors:
+        print_warning(f"{len(errors)} error(s) encountered:")
+        for e in errors[:5]:
+            console.print(f"  [red]•[/red] {e}")
 
 
 # ---------------------------------------------------------------------------
