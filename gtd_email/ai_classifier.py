@@ -104,7 +104,7 @@ def _parse_response(text: str, expected: int) -> list[dict]:
 def classify_batch(
     emails: list[dict],
     api_key: str,
-    model: str = "claude-opus-4-8",
+    model: str = "claude-haiku-4-5-20251001",
     examples: Optional[list[dict]] = None,
 ) -> list[dict]:
     """Classify a batch of emails via Claude. Returns one result dict per email."""
@@ -112,12 +112,25 @@ def classify_batch(
 
     client = anthropic.Anthropic(api_key=api_key)
     system = _build_system_prompt(examples or [])
-    message = client.messages.create(
-        model=model,
-        max_tokens=4096,
-        system=system,
-        messages=[{"role": "user", "content": _make_user_message(emails)}],
-    )
+    try:
+        message = client.messages.create(
+            model=model,
+            max_tokens=4096,
+            system=system,
+            messages=[{"role": "user", "content": _make_user_message(emails)}],
+        )
+    except anthropic.AuthenticationError:
+        raise RuntimeError(
+            "Invalid Anthropic API key. Run 'gtd setup' to update it, "
+            "or check console.anthropic.com for a valid key (starts with sk-ant-)."
+        )
+    except anthropic.BadRequestError as exc:
+        raise RuntimeError(
+            f"API request rejected (400): {exc}. "
+            f"Try a different model with --model, e.g. --model claude-haiku-4-5-20251001"
+        )
+    except anthropic.APIError as exc:
+        raise RuntimeError(f"Anthropic API error: {exc}")
     return _parse_response(message.content[0].text, len(emails))
 
 
@@ -125,7 +138,7 @@ def classify_all(
     emails: list[dict],
     api_key: str,
     examples: Optional[list[dict]] = None,
-    model: str = "claude-opus-4-8",
+    model: str = "claude-haiku-4-5-20251001",
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> list[tuple[dict, dict]]:
     """
