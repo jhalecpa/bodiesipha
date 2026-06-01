@@ -12,7 +12,7 @@ CONFIG_DIR = Path.home() / ".gtd"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 TOKEN_CACHE_FILE = CONFIG_DIR / "token_cache.bin"
 
-SCOPES = ["Mail.ReadWrite", "Mail.Send", "offline_access"]
+SCOPES = ["Mail.ReadWrite", "Mail.Send"]
 
 GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0"
 
