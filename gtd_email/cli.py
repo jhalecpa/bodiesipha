@@ -459,21 +459,49 @@ def cmd_ai_clarify(max_emails: int, dry_run: bool, offline: bool, model: str) ->
     delete_trash = False
     if trash_pairs:
         print_rule()
-        console.print(f"\n[bold red]Trash ({len(trash_pairs)} emails)[/bold red] — sample:\n")
-        for email, result in trash_pairs[:10]:
-            console.print(
-                f"  [dim]•[/dim] {email['subject'][:60]:<60}  "
-                f"[dim]{email['sender'][:30]}[/dim]\n"
-                f"    [italic dim]{result.get('reasoning', '')}[/italic dim]"
-            )
-        if len(trash_pairs) > 10:
-            console.print(f"  [dim]... and {len(trash_pairs) - 10} more[/dim]")
-        console.print()
-        delete_trash = prompt_confirm(
-            f"Permanently delete these [bold]{len(trash_pairs)}[/bold] emails from Outlook?"
-        )
+        console.print(f"\n[bold red]Trash ({len(trash_pairs)} emails)[/bold red]\n")
+
+        PAGE = 20
+        page = 0
+        while True:
+            start = page * PAGE
+            chunk = trash_pairs[start : start + PAGE]
+            for email, result in chunk:
+                console.print(
+                    f"  [dim]{start + chunk.index((email, result)) + 1:>3}.[/dim] "
+                    f"{email['subject'][:55]:<55}  [dim]{email['sender'][:25]}[/dim]\n"
+                    f"       [italic dim]{result.get('reasoning', '')}[/italic dim]"
+                )
+            remaining = len(trash_pairs) - (start + len(chunk))
+            console.print()
+            if remaining > 0:
+                choice = Prompt.ask(
+                    f"[dim]{remaining} more —[/dim] [bold]n[/bold]ext page / "
+                    "[bold]d[/bold]elete all / [bold]s[/bold]kip trash",
+                    choices=["n", "d", "s"],
+                    default="n",
+                    show_choices=False,
+                )
+                if choice == "d":
+                    delete_trash = True
+                    break
+                elif choice == "s":
+                    break
+                else:
+                    page += 1
+            else:
+                choice = Prompt.ask(
+                    f"[bold]Delete all {len(trash_pairs)} trash emails?[/bold] "
+                    "([bold]d[/bold]elete / [bold]s[/bold]kip)",
+                    choices=["d", "s"],
+                    default="s",
+                    show_choices=False,
+                )
+                delete_trash = choice == "d"
+                break
+
         if not delete_trash:
-            print_info("Trash emails will be skipped (left in inbox).")
+            print_info("Trash emails skipped — left in inbox.")
 
     # --- Confirm remaining classifications ---
     non_trash = [(e, r) for e, r in results if r["category"] != GTDCategory.TRASH]
