@@ -456,52 +456,91 @@ def cmd_ai_clarify(max_emails: int, dry_run: bool, offline: bool, model: str) ->
 
     # --- Bulk delete prompt for trash ---
     trash_pairs = [(e, r) for e, r in results if r["category"] == GTDCategory.TRASH]
+    # rescued maps email message_id -> new category chosen by user
+    rescued: dict[str, str] = {}
     delete_trash = False
+
+    _RESCUE_CATS = {
+        "r": GTDCategory.REFERENCE,
+        "n": GTDCategory.NEXT_ACTION,
+        "w": GTDCategory.WAITING,
+        "p": GTDCategory.PROJECT,
+        "s": GTDCategory.SOMEDAY,
+        "c": GTDCategory.CALENDAR,
+        "i": GTDCategory.INBOX,
+    }
+    _RESCUE_LABELS = (
+        "[bold]r[/bold]eference  [bold]n[/bold]ext-action  "
+        "[bold]w[/bold]aiting  [bold]p[/bold]roject  "
+        "[bold]s[/bold]omeday  [bold]c[/bold]alendar  [bold]i[/bold]nbox"
+    )
+
     if trash_pairs:
         print_rule()
         console.print(f"\n[bold red]Trash ({len(trash_pairs)} emails)[/bold red]\n")
+        console.print(
+            "[dim]Tip: type a row number to rescue that email into another folder.[/dim]\n"
+        )
 
         PAGE = 20
         page = 0
         while True:
             start = page * PAGE
             chunk = trash_pairs[start : start + PAGE]
-            for email, result in chunk:
+            for idx, (email, result) in enumerate(chunk):
+                abs_num = start + idx + 1
+                rescued_tag = (
+                    f"  [green]→ {GTDCategory.DISPLAY_NAMES.get(rescued[email['message_id']], '')}[/green]"
+                    if email["message_id"] in rescued else ""
+                )
                 console.print(
-                    f"  [dim]{start + chunk.index((email, result)) + 1:>3}.[/dim] "
-                    f"{email['subject'][:55]:<55}  [dim]{email['sender'][:25]}[/dim]\n"
+                    f"  [dim]{abs_num:>3}.[/dim] "
+                    f"{email['subject'][:55]:<55}  [dim]{email['sender'][:25]}[/dim]"
+                    f"{rescued_tag}\n"
                     f"       [italic dim]{result.get('reasoning', '')}[/italic dim]"
                 )
             remaining = len(trash_pairs) - (start + len(chunk))
             console.print()
-            if remaining > 0:
-                choice = Prompt.ask(
-                    f"[dim]{remaining} more —[/dim] [bold]n[/bold]ext page / "
-                    "[bold]d[/bold]elete all / [bold]s[/bold]kip trash",
-                    choices=["n", "d", "s"],
-                    default="n",
-                    show_choices=False,
-                )
-                if choice == "d":
-                    delete_trash = True
-                    break
-                elif choice == "s":
-                    break
+
+            has_more = remaining > 0
+            hint = (
+                f"[dim]{remaining} more —[/dim] " if has_more else ""
+            )
+            prompt_text = (
+                f"{hint}[bold]n[/bold]ext / [bold]d[/bold]elete all / "
+                "[bold]k[/bold]eep all / or type a [bold]row number[/bold] to rescue"
+            )
+            raw = Prompt.ask(prompt_text, default="n" if has_more else "d")
+
+            if raw.strip().isdigit():
+                num = int(raw.strip())
+                if 1 <= num <= len(trash_pairs):
+                    target_email = trash_pairs[num - 1][0]
+                    console.print(f"\n  Rescuing: [bold]{target_email['subject'][:60]}[/bold]")
+                    console.print(f"  Move to → {_RESCUE_LABELS}")
+                    cat_key = Prompt.ask("  Category", choices=list(_RESCUE_CATS), show_choices=False)
+                    rescued[target_email["message_id"]] = _RESCUE_CATS[cat_key]
+                    console.print(
+                        f"  [green]Marked as {GTDCategory.DISPLAY_NAMES[_RESCUE_CATS[cat_key]]}[/green]\n"
+                    )
                 else:
-                    page += 1
-            else:
-                choice = Prompt.ask(
-                    f"[bold]Delete all {len(trash_pairs)} trash emails?[/bold] "
-                    "([bold]d[/bold]elete / [bold]s[/bold]kip)",
-                    choices=["d", "s"],
-                    default="s",
-                    show_choices=False,
-                )
-                delete_trash = choice == "d"
+                    print_warning(f"Number {num} is out of range (1–{len(trash_pairs)}).")
+            elif raw.strip().lower() == "d":
+                delete_trash = True
+                break
+            elif raw.strip().lower() == "k":
+                break
+            elif raw.strip().lower() == "n" and has_more:
+                page += 1
+            elif not has_more and raw.strip().lower() == "n":
+                # last page, treat n as confirm delete
+                delete_trash = True
                 break
 
         if not delete_trash:
             print_info("Trash emails skipped — left in inbox.")
+        if rescued:
+            print_info(f"{len(rescued)} email(s) rescued and will be moved to their new folders.")
 
     # --- Confirm remaining classifications ---
     non_trash = [(e, r) for e, r in results if r["category"] != GTDCategory.TRASH]
@@ -525,7 +564,8 @@ def cmd_ai_clarify(max_emails: int, dry_run: bool, offline: bool, model: str) ->
     ) as progress:
         task = progress.add_task("Applying...", total=total)
         for email, result in results:
-            cat = result["category"]
+            mid = email["message_id"]
+            cat = rescued.get(mid) or result["category"]
 
             if cat == GTDCategory.INBOX:
                 skipped += 1
@@ -539,7 +579,7 @@ def cmd_ai_clarify(max_emails: int, dry_run: bool, offline: bool, model: str) ->
 
             try:
                 processor.categorize(
-                    message_id=email["message_id"],
+                    message_id=mid,
                     category=cat,
                     next_action=result.get("next_action", ""),
                     notes=result.get("reasoning", "") + (
