@@ -147,7 +147,6 @@ def cmd_setup() -> None:
     anthropic_key = Prompt.ask(
         "[bold]Anthropic API key[/bold] (optional, for [bold cyan]gtd ai-clarify[/bold cyan])",
         default=existing.get("anthropic_api_key", ""),
-        password=True,
     )
 
     config = {
