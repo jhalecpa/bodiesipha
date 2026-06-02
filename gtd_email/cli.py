@@ -324,7 +324,7 @@ def cmd_clarify(offline: bool) -> None:
               help="Show what AI would classify without saving anything.")
 @click.option("--offline", is_flag=True, default=False,
               help="Skip syncing changes back to Outlook.")
-@click.option("--model", default="claude-3-5-haiku-20241022", show_default=True,
+@click.option("--model", default="claude-haiku-4-5-20251001", show_default=True,
               help="Claude model to use for classification.")
 def cmd_ai_clarify(max_emails: int, dry_run: bool, offline: bool, model: str) -> None:
     """Bulk-classify inbox emails with AI (Claude) using the GTD methodology.

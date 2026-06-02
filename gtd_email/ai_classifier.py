@@ -104,7 +104,7 @@ def _parse_response(text: str, expected: int) -> list[dict]:
 def classify_batch(
     emails: list[dict],
     api_key: str,
-    model: str = "claude-3-5-haiku-20241022",
+    model: str = "claude-haiku-4-5-20251001",
     examples: Optional[list[dict]] = None,
 ) -> list[dict]:
     """Classify a batch of emails via Claude. Returns one result dict per email."""
@@ -139,7 +139,7 @@ def classify_all(
     emails: list[dict],
     api_key: str,
     examples: Optional[list[dict]] = None,
-    model: str = "claude-3-5-haiku-20241022",
+    model: str = "claude-haiku-4-5-20251001",
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> list[tuple[dict, dict]]:
     """
