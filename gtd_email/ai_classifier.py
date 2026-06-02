@@ -104,7 +104,7 @@ def _parse_response(text: str, expected: int) -> list[dict]:
 def classify_batch(
     emails: list[dict],
     api_key: str,
-    model: str = "claude-haiku-4-5-20251001",
+    model: str = "claude-3-5-haiku-20241022",
     examples: Optional[list[dict]] = None,
 ) -> list[dict]:
     """Classify a batch of emails via Claude. Returns one result dict per email."""
@@ -121,16 +121,17 @@ def classify_batch(
         )
     except anthropic.AuthenticationError:
         raise RuntimeError(
-            "Invalid Anthropic API key. Run 'gtd setup' to update it, "
-            "or check console.anthropic.com for a valid key (starts with sk-ant-)."
+            "Invalid Anthropic API key. Run 'gtd setup' to update it. "
+            "The key must start with sk-ant- and come from console.anthropic.com"
         )
     except anthropic.BadRequestError as exc:
         raise RuntimeError(
-            f"API request rejected (400): {exc}. "
-            f"Try a different model with --model, e.g. --model claude-haiku-4-5-20251001"
+            f"API rejected the request (400): {exc}\n"
+            f"Model used: {model}\n"
+            f"Check your API key starts with 'sk-ant-' (console.anthropic.com)"
         )
     except anthropic.APIError as exc:
-        raise RuntimeError(f"Anthropic API error: {exc}")
+        raise RuntimeError(f"Anthropic API error ({type(exc).__name__}): {exc}")
     return _parse_response(message.content[0].text, len(emails))
 
 
@@ -138,7 +139,7 @@ def classify_all(
     emails: list[dict],
     api_key: str,
     examples: Optional[list[dict]] = None,
-    model: str = "claude-haiku-4-5-20251001",
+    model: str = "claude-3-5-haiku-20241022",
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> list[tuple[dict, dict]]:
     """
