@@ -75,26 +75,35 @@ def _raise_for_status(resp: requests.Response) -> None:
 # Email reading
 # ---------------------------------------------------------------------------
 
-def fetch_inbox_emails(max_count: int = 50, skip: int = 0) -> list[dict]:
+def fetch_inbox_emails(max_count: int = 50) -> list[dict]:
     """
-    Fetch emails from the inbox.
-
-    Returns a list of message dicts with keys:
-      id, subject, from, receivedDateTime, bodyPreview, isRead, hasAttachments
+    Fetch emails from the inbox, paginating through results automatically.
+    Pass max_count=-1 to fetch every email in the inbox.
     """
+    PAGE_SIZE = 50
+    select = (
+        "id,subject,from,toRecipients,ccRecipients,receivedDateTime,"
+        "bodyPreview,isRead,hasAttachments,importance,internetMessageId,"
+        "conversationId,body"
+    )
     url = f"{GRAPH_BASE_URL}/me/mailFolders/Inbox/messages"
     params = {
-        "$top": min(max_count, 50),
-        "$skip": skip,
-        "$select": (
-            "id,subject,from,toRecipients,ccRecipients,receivedDateTime,"
-            "bodyPreview,isRead,hasAttachments,importance,internetMessageId,"
-            "conversationId,body"
-        ),
+        "$top": PAGE_SIZE,
+        "$select": select,
         "$orderby": "receivedDateTime desc",
     }
-    data = _get(url, params=params)
-    return data.get("value", [])
+
+    messages: list[dict] = []
+    while url:
+        data = _get(url, params=params)
+        page = data.get("value", [])
+        messages.extend(page)
+        if max_count != -1 and len(messages) >= max_count:
+            messages = messages[:max_count]
+            break
+        url = data.get("@odata.nextLink")
+        params = {}  # nextLink already includes all query params
+    return messages
 
 
 def fetch_email_by_id(message_id: str) -> dict:

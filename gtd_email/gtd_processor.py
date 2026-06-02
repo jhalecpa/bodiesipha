@@ -64,7 +64,7 @@ class GTDProcessor:
         if self._offline:
             raise RuntimeError("Cannot capture in offline mode.")
 
-        messages = fetch_inbox_emails(max_count=max_emails)
+        messages = fetch_inbox_emails(max_count=max_emails)  # -1 = fetch all
         new_count = 0
         for msg in messages:
             from .database import get_email_by_message_id

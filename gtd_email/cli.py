@@ -194,11 +194,17 @@ def cmd_auth() -> None:
 
 @cli.command("capture")
 @click.option("--max", "max_emails", default=50, show_default=True,
-              help="Maximum number of emails to fetch from inbox.")
-def cmd_capture(max_emails: int) -> None:
+              help="Maximum number of emails to fetch.")
+@click.option("--all", "fetch_all", is_flag=True, default=False,
+              help="Fetch every email in your inbox (may take a while for large inboxes).")
+def cmd_capture(max_emails: int, fetch_all: bool) -> None:
     """Fetch new emails from your Outlook inbox."""
     _require_auth()
     print_header("Capture")
+
+    if fetch_all:
+        print_info("Fetching [bold]all[/bold] inbox emails — this may take a few minutes...")
+        max_emails = -1
 
     processor = GTDProcessor()
     try:
